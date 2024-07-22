@@ -1,0 +1,56 @@
+﻿using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using System;
+using System.IO;
+using System.Threading.Tasks;
+using System.Text.RegularExpressions;
+
+namespace ProductoImagenes.Services
+{
+    public class BlobService
+    {
+        private readonly BlobServiceClient _blobServiceClient;
+        private readonly string _containerName;
+
+        public BlobService(string connectionString, string containerName)
+        {
+            _blobServiceClient = new BlobServiceClient(connectionString);
+            _containerName = containerName;
+        }
+
+        public async Task<string> UploadFileAsync(string fileName, Stream fileStream, string contentType)
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
+            await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+
+            string cleanFileName = CleanFileName(fileName);
+            var blobClient = containerClient.GetBlobClient(cleanFileName);
+
+            await blobClient.UploadAsync(fileStream, new BlobHttpHeaders { ContentType = contentType });
+            return blobClient.Uri.ToString();
+        }
+
+        public async Task<bool> DeleteFileAsync(string fileName)
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
+            var blobClient = containerClient.GetBlobClient(fileName);
+            return await blobClient.DeleteIfExistsAsync();
+        }
+
+        public async Task<Stream> GetFileAsync(string fileName)
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
+            var blobClient = containerClient.GetBlobClient(fileName);
+            var downloadInfo = await blobClient.DownloadAsync();
+            return downloadInfo.Value.Content;
+        }
+
+        private string CleanFileName(string fileName)
+        {
+            string invalidChars = Regex.Escape(new string(Path.GetInvalidFileNameChars()));
+            string invalidRegStr = string.Format(@"([{0}]*\.+$)|([{0}]+)", invalidChars);
+
+            return Regex.Replace(fileName, invalidRegStr, "_");
+        }
+    }
+}
