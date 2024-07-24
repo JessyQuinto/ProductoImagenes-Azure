@@ -19,8 +19,9 @@ if (string.IsNullOrEmpty(storageConnectionString))
 builder.Services.AddSingleton(x => new BlobServiceClient(storageConnectionString));
 
 // Registrar BlobService
-builder.Services.AddSingleton<BlobService>(sp =>
-    new BlobService(storageConnectionString, "imagencontainerblob"));
+var containerName = builder.Configuration["BlobService:ContainerName"];
+builder.Services.AddSingleton<IBlobService>(sp =>
+    new BlobService(storageConnectionString, containerName));
 
 // Configurar controladores
 builder.Services.AddControllers();
@@ -51,3 +52,4 @@ app.UseRouting();
 app.UseAuthorization();
 app.MapControllers();
 app.Run();
+

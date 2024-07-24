@@ -8,5 +8,4 @@
         public string ContentType { get; set; }
         public DateTime UploadedAt { get; set; }
     }
-
 }

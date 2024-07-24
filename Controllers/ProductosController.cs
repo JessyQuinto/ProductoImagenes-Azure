@@ -15,17 +15,13 @@ namespace ProductoImagenes.Controllers
     [ApiController]
     public class ProductosController : ControllerBase
     {
-        private const string ContainerName = "imagencontainerblob";
         private readonly ProductoDbContext _context;
-        private readonly BlobServiceClient _blobServiceClient;
-        private readonly BlobContainerClient _containerClient;
+        private readonly IBlobService _blobService;
 
-        public ProductosController(ProductoDbContext context, BlobServiceClient blobServiceClient)
+        public ProductosController(ProductoDbContext context, IBlobService blobService)
         {
             _context = context;
-            _blobServiceClient = blobServiceClient;
-            _containerClient = _blobServiceClient.GetBlobContainerClient(ContainerName);
-            _containerClient.CreateIfNotExists();
+            _blobService = blobService;
         }
 
         [HttpPost]
@@ -36,13 +32,12 @@ namespace ProductoImagenes.Controllers
 
             try
             {
-                var blobClient = _containerClient.GetBlobClient(file.FileName);
-                await blobClient.UploadAsync(file.OpenReadStream(), true);
+                var blobUrl = await _blobService.UploadFileAsync(file.FileName, file.OpenReadStream(), file.ContentType);
 
                 var producto = new Producto
                 {
                     Nombre = file.FileName,
-                    BlobUrl = blobClient.Uri.ToString(),
+                    BlobUrl = blobUrl,
                     ContentType = file.ContentType,
                     UploadedAt = DateTime.UtcNow
                 };
@@ -67,12 +62,8 @@ namespace ProductoImagenes.Controllers
 
             try
             {
-                var blobClient = _containerClient.GetBlobClient(producto.Nombre);
-                var memoryStream = new MemoryStream();
-                await blobClient.DownloadToAsync(memoryStream);
-                memoryStream.Position = 0;
-                var contentType = blobClient.GetProperties().Value.ContentType;
-                return File(memoryStream, contentType, producto.Nombre);
+                var fileStream = await _blobService.GetFileAsync(producto.Nombre);
+                return File(fileStream, producto.ContentType, producto.Nombre);
             }
             catch (Exception ex)
             {
@@ -89,10 +80,9 @@ namespace ProductoImagenes.Controllers
 
             try
             {
-                var blobClient = _containerClient.GetBlobClient(file.FileName);
-                await blobClient.UploadAsync(file.OpenReadStream(), true);
+                var blobUrl = await _blobService.UploadFileAsync(file.FileName, file.OpenReadStream(), file.ContentType);
 
-                producto.BlobUrl = blobClient.Uri.ToString();
+                producto.BlobUrl = blobUrl;
                 producto.ContentType = file.ContentType;
                 producto.UploadedAt = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
@@ -114,8 +104,7 @@ namespace ProductoImagenes.Controllers
 
             try
             {
-                var blobClient = _containerClient.GetBlobClient(producto.Nombre);
-                await blobClient.DeleteIfExistsAsync();
+                await _blobService.DeleteFileAsync(producto.Nombre);
                 _context.Productos.Remove(producto);
                 await _context.SaveChangesAsync();
 
@@ -131,7 +120,7 @@ namespace ProductoImagenes.Controllers
         public async Task<IActionResult> Index()
         {
             var blobs = new List<string>();
-            await foreach (var blobItem in _containerClient.GetBlobsAsync())
+            await foreach (var blobItem in _blobService.GetBlobContainerClient().GetBlobsAsync())
             {
                 blobs.Add(blobItem.Name);
             }
