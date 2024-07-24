@@ -1,62 +1,53 @@
+using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
-using Swashbuckle.AspNetCore.SwaggerGen;
 using ProductoImagenes.Data;
 using ProductoImagenes.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+// Configurar DbContext con SQL Server
+builder.Services.AddDbContext<ProductoDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("ProductosDB")));
+
+// Registrar BlobServiceClient
+var storageConnectionString = builder.Configuration.GetConnectionString("StorageAccount");
+if (string.IsNullOrEmpty(storageConnectionString))
+{
+    throw new ArgumentNullException("StorageAccount connection string is not configured.");
+}
+builder.Services.AddSingleton(x => new BlobServiceClient(storageConnectionString));
+
+// Registrar BlobService
+builder.Services.AddSingleton<BlobService>(sp =>
+    new BlobService(storageConnectionString, "imagencontainerblob"));
+
+// Configurar controladores
 builder.Services.AddControllers();
 
-// Configure EF Core to use SQL Server
-var connectionString = builder.Configuration.GetConnectionString("ProductosDB");
-builder.Services.AddDbContext<ProductoDbContext>(options =>
-    options.UseSqlServer(connectionString));
-
-// Configure BlobService
-builder.Services.AddSingleton<BlobService>(provider => new BlobService(
-    builder.Configuration["AzureBlobStorage:ConnectionString"],
-    builder.Configuration["AzureBlobStorage:ContainerName"]
-));
-
-// Configure Swagger
-builder.Services.AddEndpointsApiExplorer();
+// Configurar Swagger
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Productos API", Version = "v1" });
-    c.OperationFilter<FileUploadOperation>();
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "ProductoImagenes API", Version = "v1" });
 });
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
+    app.UseDeveloperExceptionPage();
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "ProductoImagenes API v1"));
+}
+else
+{
+    app.UseExceptionHandler("/Home/Error");
+    app.UseHsts();
 }
 
 app.UseHttpsRedirection();
+app.UseStaticFiles();
+app.UseRouting();
 app.UseAuthorization();
 app.MapControllers();
-
 app.Run();
-
-public class FileUploadOperation : IOperationFilter
-{
-    public void Apply(OpenApiOperation operation, OperationFilterContext context)
-    {
-        var fileUploadMime = "multipart/form-data";
-        if (operation.RequestBody == null || !operation.RequestBody.Content.Any(x => x.Key.Equals(fileUploadMime, StringComparison.InvariantCultureIgnoreCase)))
-            return;
-
-        var fileParams = context.MethodInfo.GetParameters().Where(p => p.ParameterType == typeof(IFormFile));
-        operation.RequestBody.Content[fileUploadMime].Schema.Properties =
-            fileParams.ToDictionary(k => k.Name, v => new OpenApiSchema()
-            {
-                Type = "string",
-                Format = "binary"
-            });
-    }
-}
