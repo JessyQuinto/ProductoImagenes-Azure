@@ -24,6 +24,7 @@ namespace ProductoImagenes.Controllers
             _blobService = blobService;
         }
 
+        // Subir un archivo y guardarlo en Azure Blob Storage
         [HttpPost]
         public async Task<IActionResult> Upload([FromForm] IFormFile file)
         {
@@ -32,8 +33,10 @@ namespace ProductoImagenes.Controllers
 
             try
             {
+                // Subir archivo al blob y guardar la URL
                 var blobUrl = await _blobService.UploadFileAsync(file.FileName, file.OpenReadStream(), file.ContentType);
 
+                // Crear y guardar la información del producto
                 var producto = new Producto
                 {
                     Nombre = file.FileName,
@@ -53,6 +56,7 @@ namespace ProductoImagenes.Controllers
             }
         }
 
+        // Descargar un archivo del Azure Blob Storage por ID de producto
         [HttpGet("{id}")]
         public async Task<IActionResult> Download(int id)
         {
@@ -71,6 +75,7 @@ namespace ProductoImagenes.Controllers
             }
         }
 
+        // Actualizar un archivo en Azure Blob Storage por ID de producto
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(int id, [FromForm] IFormFile file)
         {
@@ -80,8 +85,10 @@ namespace ProductoImagenes.Controllers
 
             try
             {
+                // Subir el nuevo archivo al blob y actualizar la URL
                 var blobUrl = await _blobService.UploadFileAsync(file.FileName, file.OpenReadStream(), file.ContentType);
 
+                // Actualizar la información del producto
                 producto.BlobUrl = blobUrl;
                 producto.ContentType = file.ContentType;
                 producto.UploadedAt = DateTime.UtcNow;
@@ -95,6 +102,7 @@ namespace ProductoImagenes.Controllers
             }
         }
 
+        // Eliminar un archivo del Azure Blob Storage por ID de producto
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {
@@ -104,6 +112,7 @@ namespace ProductoImagenes.Controllers
 
             try
             {
+                // Eliminar archivo del blob y la información del producto
                 await _blobService.DeleteFileAsync(producto.Nombre);
                 _context.Productos.Remove(producto);
                 await _context.SaveChangesAsync();
@@ -116,6 +125,7 @@ namespace ProductoImagenes.Controllers
             }
         }
 
+        // Listar todos los archivos en el contenedor de Azure Blob Storage
         [HttpGet]
         public async Task<IActionResult> Index()
         {

@@ -1,9 +1,9 @@
-﻿using System;
+﻿using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Models;
 
 namespace ProductoImagenes.Services
 {
@@ -18,6 +18,7 @@ namespace ProductoImagenes.Services
             _containerName = containerName ?? throw new ArgumentNullException(nameof(containerName));
         }
 
+        // Subir un archivo al blob
         public async Task<string> UploadFileAsync(string fileName, Stream fileStream, string contentType)
         {
             var containerClient = GetBlobContainerClient();
@@ -30,6 +31,7 @@ namespace ProductoImagenes.Services
             return blobClient.Uri.ToString();
         }
 
+        // Eliminar un archivo del blob
         public async Task<bool> DeleteFileAsync(string fileName)
         {
             var containerClient = GetBlobContainerClient();
@@ -37,6 +39,7 @@ namespace ProductoImagenes.Services
             return await blobClient.DeleteIfExistsAsync();
         }
 
+        // Obtener un archivo del blob
         public async Task<Stream> GetFileAsync(string fileName)
         {
             var containerClient = GetBlobContainerClient();
@@ -45,11 +48,13 @@ namespace ProductoImagenes.Services
             return downloadInfo.Value.Content;
         }
 
+        // Obtener el cliente del contenedor de blobs
         public BlobContainerClient GetBlobContainerClient()
         {
             return _blobServiceClient.GetBlobContainerClient(_containerName);
         }
 
+        // Limpiar el nombre del archivo de caracteres inválidos
         private string CleanFileName(string fileName)
         {
             string invalidChars = Regex.Escape(new string(Path.GetInvalidFileNameChars()));

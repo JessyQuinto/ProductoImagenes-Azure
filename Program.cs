@@ -50,6 +50,7 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthorization();
-app.MapControllers();
-app.Run();
 
+app.MapControllers();
+
+app.Run();
