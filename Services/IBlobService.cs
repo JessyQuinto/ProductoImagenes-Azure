@@ -15,6 +15,9 @@ namespace ProductoImagenes.Services
         // Obtener un archivo del blob
         Task<Stream> GetFileAsync(string fileName);
 
+        // Verificar si un archivo existe en el blob
+        Task<bool> FileExistsAsync(string fileName);
+
         // Obtener el cliente del contenedor de blobs
         BlobContainerClient GetBlobContainerClient();
     }

@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace ProductoImagenes.Controllers
 {
@@ -17,11 +18,13 @@ namespace ProductoImagenes.Controllers
     {
         private readonly ProductoDbContext _context;
         private readonly IBlobService _blobService;
+        private readonly ILogger<ProductosController> _logger;
 
-        public ProductosController(ProductoDbContext context, IBlobService blobService)
+        public ProductosController(ProductoDbContext context, IBlobService blobService, ILogger<ProductosController> logger)
         {
             _context = context;
             _blobService = blobService;
+            _logger = logger;
         }
 
         // Subir un archivo y guardarlo en Azure Blob Storage
@@ -42,7 +45,7 @@ namespace ProductoImagenes.Controllers
                 // Crear y guardar la información del producto
                 var producto = new Producto
                 {
-                    Nombre = file.FileName,
+                    Nombre = fileName,
                     BlobUrl = blobUrl,
                     ContentType = file.ContentType,
                     UploadedAt = DateTime.UtcNow
@@ -55,7 +58,8 @@ namespace ProductoImagenes.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Internal server error: {ex.Message}");
+                _logger.LogError(ex, "Error uploading file");
+                return StatusCode(500, "Internal server error: Unable to upload file.");
             }
         }
 
@@ -65,43 +69,66 @@ namespace ProductoImagenes.Controllers
         {
             var producto = await _context.Productos.FindAsync(id);
             if (producto == null)
-                return NotFound();
+                return NotFound("Producto no encontrado.");
 
             try
             {
+                if (!await _blobService.FileExistsAsync(producto.Nombre))
+                    return NotFound("Archivo no encontrado en Azure Blob Storage.");
+
                 var fileStream = await _blobService.GetFileAsync(producto.Nombre);
+
+                // Configurar la respuesta para forzar la descarga
+                Response.Headers.Add("Content-Disposition", $"attachment; filename=\"{producto.Nombre}\"");
+
                 return File(fileStream, producto.ContentType, producto.Nombre);
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Internal server error: {ex.Message}");
+                _logger.LogError(ex, "Error downloading file for product ID {ProductId}", id);
+                return StatusCode(500, "Error interno del servidor al intentar descargar el archivo.");
             }
         }
 
         // Actualizar un archivo en Azure Blob Storage por ID de producto
         [HttpPut("{id}")]
-        public async Task<IActionResult> Update(int id, [FromForm] IFormFile file)
+        public async Task<IActionResult> Update(int id, IFormFile file)
         {
+            if (file == null || file.Length == 0)
+                return BadRequest("No se proporcionó ningún archivo.");
+
             var producto = await _context.Productos.FindAsync(id);
             if (producto == null)
-                return NotFound();
+                return NotFound("Producto no encontrado.");
 
             try
             {
+                // Generar un nombre de archivo único
+                string fileName = $"{Guid.NewGuid()}{Path.GetExtension(file.FileName)}";
+
                 // Subir el nuevo archivo al blob y actualizar la URL
-                var blobUrl = await _blobService.UploadFileAsync(file.FileName, file.OpenReadStream(), file.ContentType);
+                var blobUrl = await _blobService.UploadFileAsync(fileName, file.OpenReadStream(), file.ContentType);
+
+                // Eliminar el archivo antiguo si existe
+                if (!string.IsNullOrEmpty(producto.Nombre))
+                {
+                    await _blobService.DeleteFileAsync(producto.Nombre);
+                }
 
                 // Actualizar la información del producto
+                producto.Nombre = fileName;
                 producto.BlobUrl = blobUrl;
                 producto.ContentType = file.ContentType;
                 producto.UploadedAt = DateTime.UtcNow;
+
                 await _context.SaveChangesAsync();
 
-                return NoContent();
+                return Ok(new { Message = "Archivo actualizado con éxito", ProductoId = producto.Id, NuevaBlobUrl = producto.BlobUrl });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Internal server error: {ex.Message}");
+                _logger.LogError(ex, "Error al actualizar el archivo para el producto ID {ProductId}", id);
+                return StatusCode(500, "Error interno del servidor al intentar actualizar el archivo.");
             }
         }
 
@@ -111,7 +138,7 @@ namespace ProductoImagenes.Controllers
         {
             var producto = await _context.Productos.FindAsync(id);
             if (producto == null)
-                return NotFound();
+                return NotFound("Producto no encontrado.");
 
             try
             {
@@ -120,11 +147,12 @@ namespace ProductoImagenes.Controllers
                 _context.Productos.Remove(producto);
                 await _context.SaveChangesAsync();
 
-                return NoContent();
+                return Ok(new { Message = "Producto y archivo eliminados con éxito" });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Internal server error: {ex.Message}");
+                _logger.LogError(ex, "Error al eliminar el producto y archivo para el ID {ProductId}", id);
+                return StatusCode(500, "Error interno del servidor al intentar eliminar el producto y archivo.");
             }
         }
 
@@ -132,12 +160,16 @@ namespace ProductoImagenes.Controllers
         [HttpGet]
         public async Task<IActionResult> Index()
         {
-            var blobs = new List<string>();
-            await foreach (var blobItem in _blobService.GetBlobContainerClient().GetBlobsAsync())
+            try
             {
-                blobs.Add(blobItem.Name);
+                var productos = await _context.Productos.ToListAsync();
+                return Ok(productos);
             }
-            return Ok(blobs);
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al listar los productos");
+                return StatusCode(500, "Error interno del servidor al intentar listar los productos.");
+            }
         }
     }
 }

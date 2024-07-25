@@ -23,10 +23,8 @@ namespace ProductoImagenes.Services
         {
             var containerClient = GetBlobContainerClient();
             await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
-
             string cleanFileName = CleanFileName(fileName);
             var blobClient = containerClient.GetBlobClient(cleanFileName);
-
             await blobClient.UploadAsync(fileStream, new BlobHttpHeaders { ContentType = contentType });
             return blobClient.Uri.ToString();
         }
@@ -48,6 +46,14 @@ namespace ProductoImagenes.Services
             return downloadInfo.Value.Content;
         }
 
+        // Verificar si un archivo existe en el blob
+        public async Task<bool> FileExistsAsync(string fileName)
+        {
+            var containerClient = GetBlobContainerClient();
+            var blobClient = containerClient.GetBlobClient(fileName);
+            return await blobClient.ExistsAsync();
+        }
+
         // Obtener el cliente del contenedor de blobs
         public BlobContainerClient GetBlobContainerClient()
         {
@@ -59,7 +65,6 @@ namespace ProductoImagenes.Services
         {
             string invalidChars = Regex.Escape(new string(Path.GetInvalidFileNameChars()));
             string invalidRegStr = string.Format(@"([{0}]*\.+$)|([{0}]+)", invalidChars);
-
             return Regex.Replace(fileName, invalidRegStr, "_");
         }
     }
