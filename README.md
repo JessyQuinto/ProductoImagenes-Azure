@@ -8,7 +8,7 @@ Este proyecto es una API web desarrollada en .NET 8 que permite gestionar produc
 
 - **Gestión de Productos**: Permite crear, leer, actualizar y eliminar productos.
 - **Subida de Imágenes**: Las imágenes se suben a Azure Blob Storage y se vinculan a los productos.
-- **Integración con SQL Server**: Utiliza Entity Framework Core para interactuar con una base de datos SQL Server.
+- **Integración con SQL Azure**: Utiliza un servidor azure para interactuar con las tablas propuestas en azure database.
 - **Documentación API**: Incluye documentación interactiva generada con Swagger para facilitar el uso y pruebas de la API.
 
 ## Tecnologías Utilizadas
