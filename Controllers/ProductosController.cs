@@ -25,16 +25,19 @@ namespace ProductoImagenes.Controllers
         }
 
         // Subir un archivo y guardarlo en Azure Blob Storage
-        [HttpPost]
-        public async Task<IActionResult> Upload([FromForm] IFormFile file)
+        [HttpPost("upload")]
+        public async Task<IActionResult> Upload(IFormFile file)
         {
             if (file == null || file.Length == 0)
                 return BadRequest("No file uploaded.");
 
             try
             {
+                // Generar un nombre de archivo único
+                string fileName = $"{Guid.NewGuid()}{Path.GetExtension(file.FileName)}";
+
                 // Subir archivo al blob y guardar la URL
-                var blobUrl = await _blobService.UploadFileAsync(file.FileName, file.OpenReadStream(), file.ContentType);
+                var blobUrl = await _blobService.UploadFileAsync(fileName, file.OpenReadStream(), file.ContentType);
 
                 // Crear y guardar la información del producto
                 var producto = new Producto
@@ -48,7 +51,7 @@ namespace ProductoImagenes.Controllers
                 _context.Productos.Add(producto);
                 await _context.SaveChangesAsync();
 
-                return Ok(producto);
+                return Ok(new { Message = "File uploaded successfully", ProductId = producto.Id, BlobUrl = producto.BlobUrl });
             }
             catch (Exception ex)
             {
