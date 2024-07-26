@@ -3,62 +3,91 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using ProductoImagenes.Data;
 using ProductoImagenes.Services;
+using System.Runtime.CompilerServices;
 
-var builder = WebApplication.CreateBuilder(args);
+[assembly: InternalsVisibleTo("ProductoImagenes.IntegrationTests")]
 
-// Configurar DbContext con SQL Server y habilitar resiliencia a errores transitorios
-builder.Services.AddDbContext<ProductoDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("ProductosDB"),
-    sqlServerOptions => sqlServerOptions.EnableRetryOnFailure()));
-
-// Registrar BlobServiceClient
-var storageConnectionString = builder.Configuration.GetConnectionString("StorageAccount");
-if (string.IsNullOrEmpty(storageConnectionString))
+public class Program
 {
-    throw new ArgumentNullException("StorageAccount connection string is not configured.");
-}
-builder.Services.AddSingleton(x => new BlobServiceClient(storageConnectionString));
+    public static void Main(string[] args)
+    {
+        CreateHostBuilder(args).Build().Run();
+    }
 
-// Registrar BlobService
-var containerName = builder.Configuration["BlobService:ContainerName"];
-builder.Services.AddSingleton<IBlobService>(sp =>
-    new BlobService(storageConnectionString, containerName));
-
-// Configurar controladores
-builder.Services.AddControllers();
-
-// Configurar Swagger
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "ProductoImagenes API", Version = "v1" });
-});
-
-var app = builder.Build();
-
-// Configurar el pipeline de solicitud HTTP
-if (app.Environment.IsDevelopment())
-{
-    app.UseDeveloperExceptionPage();
-}
-else
-{
-    app.UseExceptionHandler("/Error");
-    app.UseHsts();
+    public static IHostBuilder CreateHostBuilder(string[] args) =>
+        Host.CreateDefaultBuilder(args)
+            .ConfigureWebHostDefaults(webBuilder =>
+            {
+                webBuilder.UseStartup<Startup>();
+            });
 }
 
-app.UseSwagger();
-app.UseSwaggerUI(c =>
+public class Startup
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "ProductoImagenes API v1");
-    c.RoutePrefix = string.Empty;
-});
+    public IConfiguration Configuration { get; }
 
-app.UseHttpsRedirection();
-app.UseStaticFiles();
-app.UseRouting();
-app.UseAuthorization();
+    public Startup(IConfiguration configuration)
+    {
+        Configuration = configuration;
+    }
 
-app.MapControllers();
+    public void ConfigureServices(IServiceCollection services)
+    {
+        // Configurar DbContext con SQL Server y habilitar resiliencia a errores transitorios
+        services.AddDbContext<ProductoDbContext>(options =>
+            options.UseSqlServer(Configuration.GetConnectionString("ProductosDB"),
+            sqlServerOptions => sqlServerOptions.EnableRetryOnFailure()));
 
-app.Run();
+        // Registrar BlobServiceClient
+        var storageConnectionString = Configuration.GetConnectionString("StorageAccount");
+        if (string.IsNullOrEmpty(storageConnectionString))
+        {
+            throw new ArgumentNullException("StorageAccount connection string is not configured.");
+        }
+        services.AddSingleton(x => new BlobServiceClient(storageConnectionString));
+
+        // Registrar BlobService
+        var containerName = Configuration["BlobService:ContainerName"];
+        services.AddSingleton<IBlobService>(sp =>
+            new BlobService(storageConnectionString, containerName));
+
+        // Configurar controladores
+        services.AddControllers();
+
+        // Configurar Swagger
+        services.AddEndpointsApiExplorer();
+        services.AddSwaggerGen(c =>
+        {
+            c.SwaggerDoc("v1", new OpenApiInfo { Title = "ProductoImagenes API", Version = "v1" });
+        });
+    }
+
+    public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+    {
+        if (env.IsDevelopment())
+        {
+            app.UseDeveloperExceptionPage();
+        }
+        else
+        {
+            app.UseExceptionHandler("/Error");
+            app.UseHsts();
+        }
+
+        app.UseSwagger();
+        app.UseSwaggerUI(c =>
+        {
+            c.SwaggerEndpoint("/swagger/v1/swagger.json", "ProductoImagenes API v1");
+            c.RoutePrefix = string.Empty;
+        });
+
+        app.UseHttpsRedirection();
+        app.UseStaticFiles();
+        app.UseRouting();
+        app.UseAuthorization();
+        app.UseEndpoints(endpoints =>
+        {
+            endpoints.MapControllers();
+        });
+    }
+}
