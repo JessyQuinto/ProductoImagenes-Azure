@@ -6,16 +6,41 @@ using Microsoft.OpenApi.Models;
 using ProductoImagenes.Data;
 using ProductoImagenes.Services;
 using Azure.Storage.Blobs;
+using Microsoft.Extensions.Logging;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configurar logging
+builder.Logging.ClearProviders();
+builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
+builder.Logging.AddConsole();
+
+var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
 
 // Configurar Azure Key Vault
 var keyVaultEndpoint = builder.Configuration["VaultUri"];
 if (!string.IsNullOrEmpty(keyVaultEndpoint))
 {
-    builder.Configuration.AddAzureKeyVault(
-        new Uri(keyVaultEndpoint),
-        new DefaultAzureCredential());
+    try
+    {
+        logger.LogInformation("Attempting to configure Azure Key Vault");
+        builder.Configuration.AddAzureKeyVault(
+            new Uri(keyVaultEndpoint),
+            new DefaultAzureCredential(new DefaultAzureCredentialOptions
+            {
+                Diagnostics =
+                {
+                    LoggedHeaderNames = { "x-ms-request-id" },
+                    LoggedQueryParameters = { "api-version" },
+                    IsLoggingContentEnabled = true
+                }
+            }));
+        logger.LogInformation("Successfully configured Azure Key Vault");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error configuring Azure Key Vault");
+    }
 }
 
 // Configurar Azure AD
@@ -26,28 +51,40 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 var dbConnectionString = builder.Configuration["ProductosDB"];
 if (string.IsNullOrEmpty(dbConnectionString))
 {
-    throw new ArgumentNullException("ProductosDB connection string is not configured.");
+    logger.LogWarning("ProductosDB connection string is not configured.");
 }
-builder.Services.AddDbContext<ProductoDbContext>(options =>
-    options.UseSqlServer(dbConnectionString,
-    sqlServerOptions => sqlServerOptions.EnableRetryOnFailure()));
+else
+{
+    builder.Services.AddDbContext<ProductoDbContext>(options =>
+        options.UseSqlServer(dbConnectionString,
+        sqlServerOptions => sqlServerOptions.EnableRetryOnFailure()));
+    logger.LogInformation("DbContext configured successfully");
+}
 
 // Registrar BlobServiceClient
 var storageConnectionString = builder.Configuration["StorageAccount"];
 if (string.IsNullOrEmpty(storageConnectionString))
 {
-    throw new ArgumentNullException("StorageAccount connection string is not configured.");
+    logger.LogWarning("StorageAccount connection string is not configured.");
 }
-builder.Services.AddSingleton(x => new BlobServiceClient(storageConnectionString));
+else
+{
+    builder.Services.AddSingleton(x => new BlobServiceClient(storageConnectionString));
+    logger.LogInformation("BlobServiceClient registered successfully");
+}
 
 // Registrar BlobService
 var containerName = builder.Configuration["BlobService:ContainerName"];
 if (string.IsNullOrEmpty(containerName))
 {
-    throw new ArgumentNullException("BlobService:ContainerName is not configured.");
+    logger.LogWarning("BlobService:ContainerName is not configured.");
 }
-builder.Services.AddSingleton<IBlobService>(sp =>
-    new BlobService(storageConnectionString, containerName));
+else
+{
+    builder.Services.AddSingleton<IBlobService>(sp =>
+        new BlobService(storageConnectionString, containerName));
+    logger.LogInformation("BlobService registered successfully");
+}
 
 // Agregar servicios al contenedor.
 builder.Services.AddControllers();
@@ -64,11 +101,11 @@ builder.Services.AddSwaggerGen(c =>
         {
             AuthorizationCode = new OpenApiOAuthFlow
             {
-                AuthorizationUrl = new Uri("https://login.microsoftonline.com/f8eac360-1752-4ac0-b569-79e53f10f22a/oauth2/v2.0/authorize"),
-                TokenUrl = new Uri("https://login.microsoftonline.com/f8eac360-1752-4ac0-b569-79e53f10f22a/oauth2/v2.0/token"),
+                AuthorizationUrl = new Uri(builder.Configuration["Swagger:AuthorizationUrl"]),
+                TokenUrl = new Uri(builder.Configuration["Swagger:TokenUrl"]),
                 Scopes = new Dictionary<string, string>
                 {
-                    { "api://5ac79ca9-725a-4c9e-967f-6642ecff74a2/access_as_user", "Access as user" }
+                    { builder.Configuration["Swagger:Scope"], "Access as user" }
                 }
             }
         }
@@ -80,23 +117,20 @@ builder.Services.AddSwaggerGen(c =>
             {
                 Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "oauth2" }
             },
-            new[] { "api://5ac79ca9-725a-4c9e-967f-6642ecff74a2/access_as_user" }
+            new[] { builder.Configuration["Swagger:Scope"] }
         }
     });
 });
 
-// Configurar CORS si es necesario
+// Configurar CORS
+var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowSpecificOrigin",
-        builder => builder.WithOrigins("http://example.com")
+        builder => builder.WithOrigins(corsOrigins)
                           .AllowAnyHeader()
                           .AllowAnyMethod());
 });
-
-// Configurar logging
-builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
 
 var app = builder.Build();
 
@@ -118,7 +152,7 @@ app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "ProductoImagenes API v1");
-    c.OAuthClientId("5ac79ca9-725a-4c9e-967f-6642ecff74a2");
+    c.OAuthClientId(builder.Configuration["AzureAd:ClientId"]);
     c.OAuthUsePkce();
 });
 
@@ -130,4 +164,13 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-app.Run();
+try
+{
+    logger.LogInformation("Starting application");
+    app.Run();
+    logger.LogInformation("Application stopped");
+}
+catch (Exception ex)
+{
+    logger.LogCritical(ex, "Application terminated unexpectedly");
+}
