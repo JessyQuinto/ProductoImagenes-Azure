@@ -1,5 +1,7 @@
 using Azure.Identity;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Identity.Web;
 using Microsoft.OpenApi.Models;
 using ProductoImagenes.Data;
 using ProductoImagenes.Services;
@@ -15,6 +17,10 @@ if (!string.IsNullOrEmpty(keyVaultEndpoint))
         new Uri(keyVaultEndpoint),
         new DefaultAzureCredential());
 }
+
+// Configurar Azure AD
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 
 // Configurar DbContext
 var dbConnectionString = builder.Configuration["ProductosDB"];
@@ -46,9 +52,37 @@ builder.Services.AddSingleton<IBlobService>(sp =>
 // Agregar servicios al contenedor.
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
+
+// Configurar Swagger
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "ProductoImagenes API", Version = "v1" });
+    c.AddSecurityDefinition("oauth2", new OpenApiSecurityScheme
+    {
+        Type = SecuritySchemeType.OAuth2,
+        Flows = new OpenApiOAuthFlows
+        {
+            AuthorizationCode = new OpenApiOAuthFlow
+            {
+                AuthorizationUrl = new Uri("https://login.microsoftonline.com/f8eac360-1752-4ac0-b569-79e53f10f22a/oauth2/v2.0/authorize"),
+                TokenUrl = new Uri("https://login.microsoftonline.com/f8eac360-1752-4ac0-b569-79e53f10f22a/oauth2/v2.0/token"),
+                Scopes = new Dictionary<string, string>
+                {
+                    { "api://5ac79ca9-725a-4c9e-967f-6642ecff74a2/access_as_user", "Access as user" }
+                }
+            }
+        }
+    });
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "oauth2" }
+            },
+            new[] { "api://5ac79ca9-725a-4c9e-967f-6642ecff74a2/access_as_user" }
+        }
+    });
 });
 
 // Configurar CORS si es necesario
@@ -69,8 +103,7 @@ var app = builder.Build();
 // Configurar el pipeline de solicitudes HTTP.
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "ProductoImagenes API v1"));
+    app.UseDeveloperExceptionPage();
 }
 else
 {
@@ -79,7 +112,20 @@ else
 }
 
 app.UseHttpsRedirection();
+
+// Habilitar Swagger
+app.UseSwagger();
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "ProductoImagenes API v1");
+    c.OAuthClientId("5ac79ca9-725a-4c9e-967f-6642ecff74a2");
+    c.OAuthUsePkce();
+});
+
 app.UseCors("AllowSpecificOrigin");
+
+// Usar autenticación y autorización
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
