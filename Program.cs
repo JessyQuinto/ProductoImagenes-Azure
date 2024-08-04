@@ -1,93 +1,87 @@
-using Azure.Storage.Blobs;
+using Azure.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using ProductoImagenes.Data;
 using ProductoImagenes.Services;
-using System.Runtime.CompilerServices;
+using Azure.Storage.Blobs;
 
-[assembly: InternalsVisibleTo("ProductoImagenes.IntegrationTests")]
+var builder = WebApplication.CreateBuilder(args);
 
-public class Program
+// Configurar Azure Key Vault
+var keyVaultEndpoint = builder.Configuration["VaultUri"];
+if (!string.IsNullOrEmpty(keyVaultEndpoint))
 {
-    public static void Main(string[] args)
-    {
-        CreateHostBuilder(args).Build().Run();
-    }
-
-    public static IHostBuilder CreateHostBuilder(string[] args) =>
-        Host.CreateDefaultBuilder(args)
-            .ConfigureWebHostDefaults(webBuilder =>
-            {
-                webBuilder.UseStartup<Startup>();
-            });
+    builder.Configuration.AddAzureKeyVault(
+        new Uri(keyVaultEndpoint),
+        new DefaultAzureCredential());
 }
 
-public class Startup
+// Configurar DbContext
+var dbConnectionString = builder.Configuration["ProductosDB"];
+if (string.IsNullOrEmpty(dbConnectionString))
 {
-    public IConfiguration Configuration { get; }
-
-    public Startup(IConfiguration configuration)
-    {
-        Configuration = configuration;
-    }
-
-    public void ConfigureServices(IServiceCollection services)
-    {
-        // Configurar DbContext con SQL Server y habilitar resiliencia a errores transitorios
-        services.AddDbContext<ProductoDbContext>(options =>
-            options.UseSqlServer(Configuration.GetConnectionString("ProductosDB"),
-            sqlServerOptions => sqlServerOptions.EnableRetryOnFailure()));
-
-        // Registrar BlobServiceClient
-        var storageConnectionString = Configuration.GetConnectionString("StorageAccount");
-        if (string.IsNullOrEmpty(storageConnectionString))
-        {
-            throw new ArgumentNullException("StorageAccount connection string is not configured.");
-        }
-        services.AddSingleton(x => new BlobServiceClient(storageConnectionString));
-
-        // Registrar BlobService
-        var containerName = Configuration["BlobService:ContainerName"];
-        services.AddSingleton<IBlobService>(sp =>
-            new BlobService(storageConnectionString, containerName));
-
-        // Configurar controladores
-        services.AddControllers();
-
-        // Configurar Swagger
-        services.AddEndpointsApiExplorer();
-        services.AddSwaggerGen(c =>
-        {
-            c.SwaggerDoc("v1", new OpenApiInfo { Title = "ProductoImagenes API", Version = "v1" });
-        });
-    }
-
-    public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
-    {
-        if (env.IsDevelopment())
-        {
-            app.UseDeveloperExceptionPage();
-        }
-        else
-        {
-            app.UseExceptionHandler("/Error");
-            app.UseHsts();
-        }
-
-        app.UseSwagger();
-        app.UseSwaggerUI(c =>
-        {
-            c.SwaggerEndpoint("/swagger/v1/swagger.json", "ProductoImagenes API v1");
-            c.RoutePrefix = string.Empty;
-        });
-
-        app.UseHttpsRedirection();
-        app.UseStaticFiles();
-        app.UseRouting();
-        app.UseAuthorization();
-        app.UseEndpoints(endpoints =>
-        {
-            endpoints.MapControllers();
-        });
-    }
+    throw new ArgumentNullException("ProductosDB connection string is not configured.");
 }
+builder.Services.AddDbContext<ProductoDbContext>(options =>
+    options.UseSqlServer(dbConnectionString,
+    sqlServerOptions => sqlServerOptions.EnableRetryOnFailure()));
+
+// Registrar BlobServiceClient
+var storageConnectionString = builder.Configuration["StorageAccount"];
+if (string.IsNullOrEmpty(storageConnectionString))
+{
+    throw new ArgumentNullException("StorageAccount connection string is not configured.");
+}
+builder.Services.AddSingleton(x => new BlobServiceClient(storageConnectionString));
+
+// Registrar BlobService
+var containerName = builder.Configuration["BlobService:ContainerName"];
+if (string.IsNullOrEmpty(containerName))
+{
+    throw new ArgumentNullException("BlobService:ContainerName is not configured.");
+}
+builder.Services.AddSingleton<IBlobService>(sp =>
+    new BlobService(storageConnectionString, containerName));
+
+// Agregar servicios al contenedor.
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "ProductoImagenes API", Version = "v1" });
+});
+
+// Configurar CORS si es necesario
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowSpecificOrigin",
+        builder => builder.WithOrigins("http://example.com")
+                          .AllowAnyHeader()
+                          .AllowAnyMethod());
+});
+
+// Configurar logging
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+
+var app = builder.Build();
+
+// Configurar el pipeline de solicitudes HTTP.
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "ProductoImagenes API v1"));
+}
+else
+{
+    app.UseExceptionHandler("/Error");
+    app.UseHsts();
+}
+
+app.UseHttpsRedirection();
+app.UseCors("AllowSpecificOrigin");
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
