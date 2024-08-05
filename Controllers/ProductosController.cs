@@ -160,15 +160,36 @@ namespace ProductoImagenes.Controllers
         [HttpGet]
         public async Task<IActionResult> Index()
         {
+            _logger.LogInformation("Iniciando solicitud GET para obtener todos los productos");
             try
             {
+                _logger.LogInformation("Intentando acceder al contexto de la base de datos");
                 var productos = await _context.Productos.ToListAsync();
+                _logger.LogInformation($"Se obtuvieron {productos.Count} productos");
                 return Ok(productos);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error al listar los productos");
-                return StatusCode(500, "Error interno del servidor al intentar listar los productos.");
+                return StatusCode(500, $"Error interno del servidor al intentar listar los productos: {ex.Message}");
+            }
+        }
+
+        // Nuevo endpoint para probar la conexión a la base de datos
+        [HttpGet("test-db-connection")]
+        public async Task<IActionResult> TestDbConnection()
+        {
+            try
+            {
+                _logger.LogInformation("Probando conexión a la base de datos");
+                await _context.Database.CanConnectAsync();
+                _logger.LogInformation("Conexión a la base de datos exitosa");
+                return Ok("Conexión a la base de datos exitosa");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error al conectar a la base de datos");
+                return StatusCode(500, $"Error al conectar a la base de datos: {ex.Message}");
             }
         }
     }

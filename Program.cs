@@ -7,6 +7,8 @@ using ProductoImagenes.Data;
 using ProductoImagenes.Services;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging;
+using Azure.Security.KeyVault.Secrets;
+using Azure.Extensions.AspNetCore.Configuration.Secrets;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,28 +20,27 @@ builder.Logging.AddConsole();
 var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
 
 // Configurar Azure Key Vault
-var keyVaultEndpoint = builder.Configuration["VaultUri"];
-if (!string.IsNullOrEmpty(keyVaultEndpoint))
+if (builder.Environment.IsDevelopment())
 {
-    try
+    var keyVaultUrl = builder.Configuration["KeyVault:KeyVaultURL"];
+    var clientId = builder.Configuration["KeyVault:ClientId"];
+    var clientSecret = builder.Configuration["KeyVault:ClientSecret"];
+    var directoryId = builder.Configuration["KeyVault:DirectoryId"];
+
+    if (!string.IsNullOrEmpty(keyVaultUrl))
     {
-        logger.LogInformation("Attempting to configure Azure Key Vault");
-        builder.Configuration.AddAzureKeyVault(
-            new Uri(keyVaultEndpoint),
-            new DefaultAzureCredential(new DefaultAzureCredentialOptions
-            {
-                Diagnostics =
-                {
-                    LoggedHeaderNames = { "x-ms-request-id" },
-                    LoggedQueryParameters = { "api-version" },
-                    IsLoggingContentEnabled = true
-                }
-            }));
-        logger.LogInformation("Successfully configured Azure Key Vault");
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Error configuring Azure Key Vault");
+        try
+        {
+            logger.LogInformation("Attempting to configure Azure Key Vault");
+            var credential = new ClientSecretCredential(directoryId, clientId, clientSecret);
+            var client = new SecretClient(new Uri(keyVaultUrl), credential);
+            builder.Configuration.AddAzureKeyVault(client, new AzureKeyVaultConfigurationOptions());
+            logger.LogInformation("Successfully configured Azure Key Vault");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error configuring Azure Key Vault");
+        }
     }
 }
 
@@ -49,6 +50,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 // Configurar DbContext
 var dbConnectionString = builder.Configuration["ProductosDB"];
+logger.LogInformation($"DbConnectionString: {dbConnectionString}");
 if (string.IsNullOrEmpty(dbConnectionString))
 {
     logger.LogWarning("ProductosDB connection string is not configured.");
@@ -62,10 +64,11 @@ else
 }
 
 // Registrar BlobServiceClient
-var storageConnectionString = builder.Configuration["StorageAccount"];
+var storageConnectionString = builder.Configuration["StorageAccountfeedbackgeneral"];
+logger.LogInformation($"StorageConnectionString: {storageConnectionString}");
 if (string.IsNullOrEmpty(storageConnectionString))
 {
-    logger.LogWarning("StorageAccount connection string is not configured.");
+    logger.LogWarning("StorageAccountfeedbackgeneral connection string is not configured.");
 }
 else
 {
@@ -75,6 +78,7 @@ else
 
 // Registrar BlobService
 var containerName = builder.Configuration["BlobService:ContainerName"];
+logger.LogInformation($"ContainerName: {containerName}");
 if (string.IsNullOrEmpty(containerName))
 {
     logger.LogWarning("BlobService:ContainerName is not configured.");
@@ -161,6 +165,14 @@ app.UseCors("AllowSpecificOrigin");
 // Usar autenticación y autorización
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Agregar middleware de logging
+app.Use(async (context, next) =>
+{
+    logger.LogInformation($"Request {context.Request.Method} {context.Request.Path} started");
+    await next();
+    logger.LogInformation($"Request {context.Request.Method} {context.Request.Path} completed with status code {context.Response.StatusCode}");
+});
 
 app.MapControllers();
 
