@@ -10,7 +10,8 @@ using Microsoft.Extensions.Logging;
 using Azure.Security.KeyVault.Secrets;
 using Azure.Extensions.AspNetCore.Configuration.Secrets;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.AspNetCore.Mvc.Filters;
+using ProductoImagenes.Middleware;
+using ProductoImagenes.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -204,100 +205,4 @@ try
 catch (Exception ex)
 {
     logger.LogCritical(ex, "Application terminated unexpectedly");
-}
-
-// El resto del código (DbReconnectionMiddleware, DbReconnectionFilter, DbHealthCheck) permanece igual
-public class DbReconnectionMiddleware
-{
-    private readonly RequestDelegate _next;
-
-    public DbReconnectionMiddleware(RequestDelegate next)
-    {
-        _next = next;
-    }
-
-    public async Task InvokeAsync(HttpContext context, ProductoDbContext dbContext, ILogger<DbReconnectionMiddleware> logger)
-    {
-        try
-        {
-            if (!await dbContext.Database.CanConnectAsync())
-            {
-                logger.LogWarning("Database connection lost. Attempting to reconnect...");
-                await dbContext.Database.OpenConnectionAsync();
-                logger.LogInformation("Successfully reconnected to the database.");
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to reconnect to the database.");
-        }
-
-        await _next(context);
-    }
-}
-
-// Definición de DbReconnectionFilter
-public class DbReconnectionFilter : IAsyncActionFilter
-{
-    private readonly ProductoDbContext _dbContext;
-    private readonly ILogger<DbReconnectionFilter> _logger;
-
-    public DbReconnectionFilter(ProductoDbContext dbContext, ILogger<DbReconnectionFilter> logger)
-    {
-        _dbContext = dbContext;
-        _logger = logger;
-    }
-
-    public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
-    {
-        try
-        {
-            if (!await _dbContext.Database.CanConnectAsync())
-            {
-                _logger.LogWarning("Database connection lost. Attempting to reconnect...");
-                await _dbContext.Database.OpenConnectionAsync();
-                _logger.LogInformation("Successfully reconnected to the database.");
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to reconnect to the database.");
-        }
-
-        await next();
-    }
-}
-
-// Definición de DbHealthCheck
-public class DbHealthCheck : IHealthCheck
-{
-    private readonly ProductoDbContext _dbContext;
-    private readonly ILogger<DbHealthCheck> _logger;
-
-    public DbHealthCheck(ProductoDbContext dbContext, ILogger<DbHealthCheck> logger)
-    {
-        _dbContext = dbContext;
-        _logger = logger;
-    }
-
-    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            if (await _dbContext.Database.CanConnectAsync(cancellationToken))
-            {
-                return HealthCheckResult.Healthy("Database connection is healthy.");
-            }
-
-            _logger.LogWarning("Database connection lost. Attempting to reconnect...");
-            await _dbContext.Database.OpenConnectionAsync(cancellationToken);
-            _logger.LogInformation("Successfully reconnected to the database.");
-            return HealthCheckResult.Healthy("Database reconnection successful.");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to connect to the database.");
-            return HealthCheckResult.Unhealthy("Database connection failed.", ex);
-        }
-    }
 }
