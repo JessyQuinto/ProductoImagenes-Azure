@@ -9,6 +9,8 @@ using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging;
 using Azure.Security.KeyVault.Secrets;
 using Azure.Extensions.AspNetCore.Configuration.Secrets;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Mvc.Filters;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,31 +18,29 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
 builder.Logging.AddConsole();
+builder.Logging.AddDebug();
 
 var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
 
 // Configurar Azure Key Vault
-if (builder.Environment.IsDevelopment())
-{
-    var keyVaultUrl = builder.Configuration["KeyVault:KeyVaultURL"];
-    var clientId = builder.Configuration["KeyVault:ClientId"];
-    var clientSecret = builder.Configuration["KeyVault:ClientSecret"];
-    var directoryId = builder.Configuration["KeyVault:DirectoryId"];
+var keyVaultUrl = builder.Configuration["KeyVault:KeyVaultURL"];
+var clientId = builder.Configuration["KeyVault:ClientId"];
+var clientSecret = builder.Configuration["KeyVault:ClientSecret"];
+var directoryId = builder.Configuration["KeyVault:DirectoryId"];
 
-    if (!string.IsNullOrEmpty(keyVaultUrl))
+if (!string.IsNullOrEmpty(keyVaultUrl))
+{
+    try
     {
-        try
-        {
-            logger.LogInformation("Attempting to configure Azure Key Vault");
-            var credential = new ClientSecretCredential(directoryId, clientId, clientSecret);
-            var client = new SecretClient(new Uri(keyVaultUrl), credential);
-            builder.Configuration.AddAzureKeyVault(client, new AzureKeyVaultConfigurationOptions());
-            logger.LogInformation("Successfully configured Azure Key Vault");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error configuring Azure Key Vault");
-        }
+        logger.LogInformation("Attempting to configure Azure Key Vault");
+        var credential = new ClientSecretCredential(directoryId, clientId, clientSecret);
+        var client = new SecretClient(new Uri(keyVaultUrl), credential);
+        builder.Configuration.AddAzureKeyVault(client, new AzureKeyVaultConfigurationOptions());
+        logger.LogInformation("Successfully configured Azure Key Vault");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error configuring Azure Key Vault");
     }
 }
 
@@ -48,27 +48,33 @@ if (builder.Environment.IsDevelopment())
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 
-// Configurar DbContext
+// Configurar DbContext con retry policy
 var dbConnectionString = builder.Configuration["ProductosDB"];
-logger.LogInformation($"DbConnectionString: {dbConnectionString}");
+logger.LogInformation("Attempting to retrieve ProductosDB connection string from Key Vault");
 if (string.IsNullOrEmpty(dbConnectionString))
 {
-    logger.LogWarning("ProductosDB connection string is not configured.");
+    logger.LogWarning("ProductosDB connection string is not configured in Key Vault.");
 }
 else
 {
     builder.Services.AddDbContext<ProductoDbContext>(options =>
         options.UseSqlServer(dbConnectionString,
-        sqlServerOptions => sqlServerOptions.EnableRetryOnFailure()));
-    logger.LogInformation("DbContext configured successfully");
+            sqlServerOptionsAction: sqlOptions =>
+            {
+                sqlOptions.EnableRetryOnFailure(
+                    maxRetryCount: 5,
+                    maxRetryDelay: TimeSpan.FromSeconds(30),
+                    errorNumbersToAdd: null);
+            }));
+    logger.LogInformation("DbContext configured successfully with retry policy");
 }
 
 // Registrar BlobServiceClient
 var storageConnectionString = builder.Configuration["StorageAccountfeedbackgeneral"];
-logger.LogInformation($"StorageConnectionString: {storageConnectionString}");
+logger.LogInformation("Attempting to retrieve StorageAccountfeedbackgeneral connection string from Key Vault");
 if (string.IsNullOrEmpty(storageConnectionString))
 {
-    logger.LogWarning("StorageAccountfeedbackgeneral connection string is not configured.");
+    logger.LogWarning("StorageAccountfeedbackgeneral connection string is not configured in Key Vault.");
 }
 else
 {
@@ -91,7 +97,10 @@ else
 }
 
 // Agregar servicios al contenedor.
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<DbReconnectionFilter>();
+});
 builder.Services.AddEndpointsApiExplorer();
 
 // Configurar Swagger
@@ -136,6 +145,10 @@ builder.Services.AddCors(options =>
                           .AllowAnyMethod());
 });
 
+// Configurar Health Checks
+builder.Services.AddHealthChecks()
+    .AddCheck<DbHealthCheck>("database_health_check", failureStatus: HealthStatus.Unhealthy, tags: new[] { "database" });
+
 var app = builder.Build();
 
 // Configurar el pipeline de solicitudes HTTP.
@@ -174,7 +187,13 @@ app.Use(async (context, next) =>
     logger.LogInformation($"Request {context.Request.Method} {context.Request.Path} completed with status code {context.Response.StatusCode}");
 });
 
+// Agregar middleware de reconexión a la base de datos
+app.UseMiddleware<DbReconnectionMiddleware>();
+
 app.MapControllers();
+
+// Configurar Health Checks
+app.MapHealthChecks("/health");
 
 try
 {
@@ -185,4 +204,100 @@ try
 catch (Exception ex)
 {
     logger.LogCritical(ex, "Application terminated unexpectedly");
+}
+
+// El resto del código (DbReconnectionMiddleware, DbReconnectionFilter, DbHealthCheck) permanece igual
+public class DbReconnectionMiddleware
+{
+    private readonly RequestDelegate _next;
+
+    public DbReconnectionMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    public async Task InvokeAsync(HttpContext context, ProductoDbContext dbContext, ILogger<DbReconnectionMiddleware> logger)
+    {
+        try
+        {
+            if (!await dbContext.Database.CanConnectAsync())
+            {
+                logger.LogWarning("Database connection lost. Attempting to reconnect...");
+                await dbContext.Database.OpenConnectionAsync();
+                logger.LogInformation("Successfully reconnected to the database.");
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to reconnect to the database.");
+        }
+
+        await _next(context);
+    }
+}
+
+// Definición de DbReconnectionFilter
+public class DbReconnectionFilter : IAsyncActionFilter
+{
+    private readonly ProductoDbContext _dbContext;
+    private readonly ILogger<DbReconnectionFilter> _logger;
+
+    public DbReconnectionFilter(ProductoDbContext dbContext, ILogger<DbReconnectionFilter> logger)
+    {
+        _dbContext = dbContext;
+        _logger = logger;
+    }
+
+    public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
+    {
+        try
+        {
+            if (!await _dbContext.Database.CanConnectAsync())
+            {
+                _logger.LogWarning("Database connection lost. Attempting to reconnect...");
+                await _dbContext.Database.OpenConnectionAsync();
+                _logger.LogInformation("Successfully reconnected to the database.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to reconnect to the database.");
+        }
+
+        await next();
+    }
+}
+
+// Definición de DbHealthCheck
+public class DbHealthCheck : IHealthCheck
+{
+    private readonly ProductoDbContext _dbContext;
+    private readonly ILogger<DbHealthCheck> _logger;
+
+    public DbHealthCheck(ProductoDbContext dbContext, ILogger<DbHealthCheck> logger)
+    {
+        _dbContext = dbContext;
+        _logger = logger;
+    }
+
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (await _dbContext.Database.CanConnectAsync(cancellationToken))
+            {
+                return HealthCheckResult.Healthy("Database connection is healthy.");
+            }
+
+            _logger.LogWarning("Database connection lost. Attempting to reconnect...");
+            await _dbContext.Database.OpenConnectionAsync(cancellationToken);
+            _logger.LogInformation("Successfully reconnected to the database.");
+            return HealthCheckResult.Healthy("Database reconnection successful.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to connect to the database.");
+            return HealthCheckResult.Unhealthy("Database connection failed.", ex);
+        }
+    }
 }
